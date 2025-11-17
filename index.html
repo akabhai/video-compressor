@@ -4,57 +4,224 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Video Compressor</title>
-
     <link rel="icon" href="data:,">
 
-    <!-- Stable version that defines window.FFmpeg -->
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/umd/ffmpeg.min.js"></script>
+    <!-- FFmpeg v0.12.10 script - newer and more stable -->
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js"></script>
 
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            padding: 20px; 
+            background: #f0f2f5; 
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            min-height: 100vh;
+        }
+        .container {
+            background: white; 
+            padding: 25px; 
+            border-radius: 12px;
+            max-width: 600px; 
+            width: 100%;
+            margin: auto; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        h2 { 
+            margin-top: 0;
+            color: #1c1e21;
+        }
+        input[type="file"] {
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 6px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        button {
+            background: #007bff; 
+            color: white; 
+            padding: 12px 20px;
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            margin-top: 20px;
+            font-size: 16px;
+            width: 100%;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #a0a0a0;
+            cursor: not-allowed;
+        }
+        .status-box {
+            margin-top: 20px;
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 6px;
+            display: none; /* Hidden by default */
+        }
+        .progress-bar {
+            width: 100%;
+            background-color: #ccc;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .progress-bar-fill {
+            height: 20px;
+            width: 0%;
+            background-color: #28a745;
+            transition: width 0.2s;
+            text-align: center;
+            line-height: 20px;
+            color: white;
+            font-size: 12px;
+        }
+        .video-previews {
+            display: none; /* Hidden by default */
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .video-previews video {
+            width: 100%;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+        }
+        .video-previews h4 {
+            margin: 0 0 5px 0;
+            text-align: center;
+        }
+    </style>
 </head>
 <body>
 
-<div style="max-width:500px;margin:auto;padding:20px;background:white;border-radius:10px;">
-    <h2>Video Compressor</h2>
-    <input type="file" id="inputVideo" accept="video/*"><br><br>
-    <button onclick="compressVideo()">Compress Video</button>
-    <p id="status"></p>
+<div class="container">
+    <h2>In-Browser Video Compressor</h2>
+    <p>Select a video file to compress it directly in your browser. All processing is done on your computer.</p>
+    <input type="file" id="inputVideo" accept="video/*"><br>
+    
+    <button id="compressBtn" onclick="compressVideo()">Compress Video</button>
+    
+    <div id="statusBox" class="status-box">
+        <p id="statusText">Loading FFmpeg core...</p>
+        <div class="progress-bar">
+            <div id="progressBarFill" class="progress-bar-fill">0%</div>
+        </div>
+    </div>
+
+    <div id="videoPreviews" class="video-previews">
+        <div>
+            <h4>Original Video</h4>
+            <video id="originalVideo" controls></video>
+            <p id="originalSize"></p>
+        </div>
+        <div>
+            <h4>Compressed Video</h4>
+            <video id="compressedVideo" controls></video>
+            <p id="compressedSize"></p>
+        </div>
+    </div>
+    <a id="downloadLink" style="display:none;"></a>
 </div>
 
 <script>
-async function compressVideo() {
+    // Get references to DOM elements
+    const inputVideo = document.getElementById('inputVideo');
+    const compressBtn = document.getElementById('compressBtn');
+    const statusBox = document.getElementById('statusBox');
+    const statusText = document.getElementById('statusText');
+    const progressBarFill = document.getElementById('progressBarFill');
+    const videoPreviews = document.getElementById('videoPreviews');
+    const originalVideo = document.getElementById('originalVideo');
+    const compressedVideo = document.getElementById('compressedVideo');
+    const originalSize = document.getElementById('originalSize');
+    const compressedSize = document.getElementById('compressedSize');
+    const downloadLink = document.getElementById('downloadLink');
 
-    const file = document.getElementById("inputVideo").files[0];
-    if (!file) return alert("Select a video first!");
+    async function compressVideo() {
+        const file = inputVideo.files[0];
+        if (!file) {
+            alert("Please select a video file first.");
+            return;
+        }
 
-    document.getElementById("status").innerText = "Loading FFmpeg...";
+        // --- UI Setup ---
+        compressBtn.disabled = true;
+        statusBox.style.display = 'block';
+        videoPreviews.style.display = 'none';
+        progressBarFill.style.width = '0%';
+        progressBarFill.innerText = '0%';
+        statusText.innerText = 'Loading FFmpeg Core... (This may take a moment)';
 
-    // Use FFmpeg from the global object
-    const { createFFmpeg, fetchFile } = window.FFmpeg;
+        // Show original video preview
+        originalVideo.src = URL.createObjectURL(file);
+        originalSize.innerText = `Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`;
 
-    const ffmpeg = createFFmpeg({ log: true });
-    await ffmpeg.load();
+        // --- FFmpeg Setup ---
+        // **THE FIX:** The library is on window.FFmpeg.FFmpeg, not window.FFmpeg
+        const { FFmpeg, fetchFile } = window.FFmpeg;
+        const ffmpeg = new FFmpeg({ log: true });
 
-    document.getElementById("status").innerText = "Compressing...";
+        // **IMPROVEMENT:** Set the core path for robust loading
+        await ffmpeg.load({
+            coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js'
+        });
 
-    ffmpeg.FS("writeFile", "input.mp4", await fetchFile(file));
+        // **IMPROVEMENT:** Listen for progress events
+        ffmpeg.on('progress', ({ progress }) => {
+            const percentage = Math.round(progress * 100);
+            progressBarFill.style.width = `${percentage}%`;
+            progressBarFill.innerText = `${percentage}%`;
+        });
+        
+        statusText.innerText = 'Preparing for compression...';
+        ffmpeg.fs('writeFile', 'input.mp4', await fetchFile(file));
 
-    await ffmpeg.run(
-        "-i", "input.mp4",
-        "-vcodec", "libx264",
-        "-crf", "28",
-        "output.mp4"
-    );
+        statusText.innerText = 'Compressing video...';
+        await ffmpeg.run(
+            '-i', 'input.mp4',    // Input file
+            '-vcodec', 'libx24', // Video codec
+            '-crf', '28',         // Constant Rate Factor (quality, 28 is a good balance)
+            '-preset', 'fast',    // Encoding speed vs. compression ratio
+            'output.mp4'          // Output file
+        );
 
-    const data = ffmpeg.FS("readFile", "output.mp4");
-    const url = URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
+        statusText.innerText = 'Finalizing...';
+        const data = ffmpeg.fs('readFile', 'output.mp4');
+        const compressedBlob = new Blob([data.buffer], { type: 'video/mp4' });
+        const compressedUrl = URL.createObjectURL(compressedBlob);
 
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "compressed.mp4";
-    a.click();
+        // --- UI Teardown & Display Results ---
+        compressedVideo.src = compressedUrl;
+        videoPreviews.style.display = 'grid';
+        
+        const compressedFileSize = (compressedBlob.size / 1024 / 1024).toFixed(2);
+        const reduction = Math.round((1 - compressedBlob.size / file.size) * 100);
+        compressedSize.innerText = `Size: ${compressedFileSize} MB (${reduction}% smaller)`;
 
-    document.getElementById("status").innerText = "Done!";
-}
+        statusText.innerText = 'Compression Complete!';
+        
+        // Prepare download link
+        downloadLink.href = compressedUrl;
+        downloadLink.download = `compressed_${file.name}`;
+        downloadLink.innerText = 'Download Compressed Video';
+        downloadLink.style.display = 'block';
+        downloadLink.style.textAlign = 'center';
+        downloadLink.style.marginTop = '20px';
+        downloadLink.onclick = () => downloadLink.click(); // Trigger download
+
+        compressBtn.disabled = false;
+        
+        // Clean up the virtual file system
+        ffmpeg.fs('unlink', 'input.mp4');
+        ffmpeg.fs('unlink', 'output.mp4');
+    }
 </script>
 
 </body>
