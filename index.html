@@ -8,34 +8,18 @@
     <!-- Fix favicon error -->
     <link rel="icon" href="data:,">
 
-    <!-- Load FFmpeg from CDN -->
-    <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.4/dist/ffmpeg.min.js"></script>
+    <!-- Working FFmpeg build for GitHub Pages -->
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.4/dist/umd/ffmpeg.min.js"></script>
 
     <style>
-        body {
-            font-family: Arial;
-            padding: 20px;
-            background: #f5f5f5;
-        }
+        body { font-family: Arial; padding: 20px; background: #f5f5f5; }
         .box {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            max-width: 500px;
-            margin: auto;
-            box-shadow: 0 0 10px #ccc;
+            background: white; padding: 20px; border-radius: 10px;
+            max-width: 500px; margin: auto; box-shadow: 0 0 10px #ccc;
         }
         button {
-            background: #007bff;
-            color: white;
-            padding: 10px 15px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            margin-top: 15px;
-        }
-        button:disabled {
-            background: gray;
+            background: #007bff; color: white; padding: 10px 15px;
+            border: none; border-radius: 5px; cursor: pointer; margin-top: 15px;
         }
     </style>
 </head>
@@ -50,45 +34,37 @@
 
 <script>
 async function compressVideo() {
-    const videoFile = document.getElementById("inputVideo").files[0];
-    if (!videoFile) {
-        alert("Please select a video first!");
-        return;
-    }
+    const file = document.getElementById("inputVideo").files[0];
+    if (!file) return alert("Select a video first");
 
     document.getElementById("status").innerText = "Loading FFmpeg...";
 
-    // Load FFmpeg core
-    const { createFFmpeg, fetchFile } = FFmpeg;
-    const ffmpeg = createFFmpeg({ log: true });
+    // Get FFmpeg from global window object
+    const { createFFmpeg, fetchFile } = window.FFmpeg;
 
+    const ffmpeg = createFFmpeg({ log: true });
     await ffmpeg.load();
 
-    document.getElementById("status").innerText = "Compressing video...";
+    document.getElementById("status").innerText = "Compressing...";
 
-    // Write original video to FFmpeg FS
-    ffmpeg.FS("writeFile", "input.mp4", await fetchFile(videoFile));
+    ffmpeg.FS("writeFile", "input.mp4", await fetchFile(file));
 
-    // Run compression command (H.264, lower bitrate)
     await ffmpeg.run(
         "-i", "input.mp4",
         "-vcodec", "libx264",
-        "-crf", "28",         // Change 18–32 (lower = high quality, higher = more compression)
+        "-crf", "28",
         "output.mp4"
     );
 
-    // Read output file
     const data = ffmpeg.FS("readFile", "output.mp4");
-
-    // Convert to downloadable link
     const url = URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
 
     const a = document.createElement("a");
     a.href = url;
-    a.download = "compressed-video.mp4";
+    a.download = "compressed.mp4";
     a.click();
 
-    document.getElementById("status").innerText = "Done! Download starting...";
+    document.getElementById("status").innerText = "Done!";
 }
 </script>
 
