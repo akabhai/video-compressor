@@ -6,9 +6,8 @@
     <title>Video Compressor</title>
     <link rel="icon" href="data:,">
 
-    <!-- FFmpeg v0.12.10 script - newer and more stable -->
-    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/umd/ffmpeg.min.js"></script>
-
+    <!-- FFmpeg v0.12.10 script -->
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.min.js"></script>
 
     <style>
         body { 
@@ -72,6 +71,7 @@
             background-color: #ccc;
             border-radius: 4px;
             overflow: hidden;
+            margin-top: 10px;
         }
         .progress-bar-fill {
             height: 20px;
@@ -98,13 +98,28 @@
             margin: 0 0 5px 0;
             text-align: center;
         }
+        .download-button {
+            display: block;
+            text-decoration: none;
+            text-align: center;
+            margin-top: 20px;
+            background: #28a745;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 6px;
+            font-size: 16px;
+            transition: background-color 0.2s;
+        }
+        .download-button:hover {
+            background: #218838;
+        }
     </style>
 </head>
 <body>
 
 <div class="container">
     <h2>In-Browser Video Compressor</h2>
-    <p>Select a video file to compress it directly in your browser. All processing is done on your computer.</p>
+    <p>Select a video file to compress it directly in your browser. All processing is done locally on your computer.</p>
     <input type="file" id="inputVideo" accept="video/*"><br>
     
     <button id="compressBtn" onclick="compressVideo()">Compress Video</button>
@@ -128,7 +143,7 @@
             <p id="compressedSize"></p>
         </div>
     </div>
-    <a id="downloadLink" style="display:none;"></a>
+    <a id="downloadLink" class="download-button" style="display:none;">Download Compressed Video</a>
 </div>
 
 <script>
@@ -146,66 +161,79 @@
 
     async function compressVideo() {
         const file = inputVideo.files[0];
-        if (!file) return alert("Please select a video.");
+        if (!file) {
+            alert("Please select a video file first.");
+            return;
+        }
 
+        // --- UI Setup ---
         compressBtn.disabled = true;
-        statusBox.style.display = "block";
-        videoPreviews.style.display = "none";
-        progressBarFill.style.width = "0%";
-        progressBarFill.innerText = "0%";
-        statusText.innerText = "Loading FFmpeg core...";
+        downloadLink.style.display = 'none';
+        statusBox.style.display = 'block';
+        videoPreviews.style.display = 'none';
+        progressBarFill.style.width = '0%';
+        progressBarFill.innerText = '0%';
+        statusText.innerText = 'Loading FFmpeg Core...';
 
         originalVideo.src = URL.createObjectURL(file);
         originalSize.innerText = `Size: ${(file.size / 1024 / 1024).toFixed(2)} MB`;
 
-        // Correct Global API (v0.11.6)
-        const { createFFmpeg, fetchFile } = window.FFmpeg;
-        const ffmpeg = createFFmpeg({ log: true });
+        // --- FFmpeg Setup ---
+        // **THE DEFINITIVE FIX:** Access the library from the global `FFmpeg` variable.
+        const { FFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = new FFmpeg({ log: true });
 
-        // Load FFmpeg
-        await ffmpeg.load();
-
-        // Progress Listener
-        ffmpeg.setProgress(({ ratio }) => {
-            const percent = Math.round(ratio * 100);
-            progressBarFill.style.width = percent + "%";
-            progressBarFill.innerText = percent + "%";
+        // **IMPORTANT:** Set the core path for robust loading from the CDN
+        await ffmpeg.load({
+            coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js'
         });
 
-        statusText.innerText = "Compressing video...";
+        ffmpeg.on('progress', ({ progress }) => {
+            const percentage = Math.round(progress * 100);
+            if (percentage <= 100) {
+                progressBarFill.style.width = `${percentage}%`;
+                progressBarFill.innerText = `${percentage}%`;
+            }
+        });
+        
+        statusText.innerText = 'Preparing for compression...';
+        ffmpeg.fs('writeFile', 'input.mp4', await fetchFile(file));
 
-        ffmpeg.FS('writeFile', 'input.mp4', await fetchFile(file));
-
+        statusText.innerText = 'Compressing video... (This can take a while)';
         await ffmpeg.run(
             '-i', 'input.mp4',
             '-vcodec', 'libx264',
             '-crf', '28',
+            '-preset', 'fast',
             'output.mp4'
         );
 
-        const data = ffmpeg.FS('readFile', 'output.mp4');
-        const compressedBlob = new Blob([data.buffer], { type: "video/mp4" });
+        statusText.innerText = 'Finalizing...';
+        const data = ffmpeg.fs('readFile', 'output.mp4');
+        const compressedBlob = new Blob([data.buffer], { type: 'video/mp4' });
         const compressedUrl = URL.createObjectURL(compressedBlob);
 
+        // --- UI Teardown & Display Results ---
         compressedVideo.src = compressedUrl;
-        videoPreviews.style.display = "grid";
+        videoPreviews.style.display = 'grid';
+        
+        const compressedFileSize = (compressedBlob.size / 1024 / 1024).toFixed(2);
+        const reduction = Math.round((1 - compressedBlob.size / file.size) * 100);
+        compressedSize.innerText = `Size: ${compressedFileSize} MB (${reduction}% smaller)`;
 
-        compressedSize.innerText =
-            `Size: ${(compressedBlob.size / 1024 / 1024).toFixed(2)} MB`;
-
+        statusText.innerText = 'Compression Complete!';
+        
         downloadLink.href = compressedUrl;
-        downloadLink.download = "compressed_" + file.name;
-        downloadLink.innerText = "Download Compressed Video";
-        downloadLink.style.display = "block";
+        downloadLink.download = `compressed_${file.name}`;
+        downloadLink.style.display = 'block';
 
         compressBtn.disabled = false;
-        statusText.innerText = "Compression complete!";
-
-        ffmpeg.FS('unlink', 'input.mp4');
-        ffmpeg.FS('unlink', 'output.mp4');
+        
+        // Clean up the virtual file system to free memory
+        ffmpeg.fs('unlink', 'input.mp4');
+        ffmpeg.fs('unlink', 'output.mp4');
     }
 </script>
-
 
 </body>
 </html>
