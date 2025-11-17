@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Client-side Video Compressor (ffmpeg.wasm)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; max-width:800px; margin:40px auto; line-height:1.45; }
+    label, button { display:block; margin-top:12px; }
+    #log { white-space: pre-wrap; background:#f6f8fa; padding:12px; border-radius:8px; margin-top:12px; max-height:220px; overflow:auto; font-size:13px; }
+    progress { width:100%; height:14px; margin-top:8px; }
+    .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+    input[type="number"]{ width:100px; }
+  </style>
+</head>
+<body>
+  <h1>Client-side Video Compressor</h1>
+  <p>Select a video (MP4 / WebM / MOV etc.) and compress it entirely in your browser.</p>
+
+  <label>
+    Choose video:
+    <input id="videoFile" type="file" accept="video/*">
+  </label>
+
+  <div class="controls">
+    <label>Target width (px) — keep aspect ratio (set blank to keep original):
+      <input id="targetWidth" type="number" placeholder="640">
+    </label>
+
+    <label>CRF (quality, 0-best..51-worst) — higher = smaller:
+      <input id="crf" type="number" value="28" min="0" max="51">
+    </label>
+
+    <label>Audio bitrate (kbps):
+      <input id="abr" type="number" value="128" min="32" max="320">
+    </label>
+
+    <button id="compressBtn" disabled>Compress</button>
+    <a id="downloadLink" style="display:none" download="compressed.mp4">Download compressed.mp4</a>
+  </div>
+
+  <progress id="progress" value="0" max="1" style="display:none"></progress>
+  <div id="log"></div>
+
+  <!-- ffmpeg.wasm global build from unpkg (exposes FFmpeg) -->
+  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.11/dist/ffmpeg.min.js"></script>
+  <script>
+    (async () => {
+      const { createFFmpeg, fetchFile } = FFmpeg;
+      const ffmpeg = createFFmpeg({ log: true });
+      const logEl = document.getElementById('log');
+      const progressEl = document.getElementById('progress');
+      const fileInput = document.getElementById('videoFile');
+      const compressBtn = document.getElementById('compressBtn');
+      const downloadLink = document.getElementById('downloadLink');
+
+      function log(...args){
+        logEl.textContent += args.join(' ') + "\\n";
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      // enable button only when file selected
+      fileInput.addEventListener('change', () => {
+        compressBtn.disabled = !fileInput.files.length;
+        downloadLink.style.display = 'none';
+        progressEl.style.display = 'none';
+        progressEl.value = 0;
+        logEl.textContent = '';
+      });
+
+      // progress reporting
+      ffmpeg.setProgress(({ ratio }) => {
+        progressEl.style.display = 'block';
+        progressEl.value = ratio;
+        // clamp visible percent
+        logEl.textContent = `Progress: ${(ratio*100).toFixed(1)}%\\n` + logEl.textContent;
+      });
+
+      compressBtn.addEventListener('click', async () => {
+        if (!fileInput.files.length) return;
+        const file = fileInput.files[0];
+
+        // UI reset
+        logEl.textContent = '';
+        downloadLink.style.display = 'none';
+        progressEl.value = 0;
+        progressEl.style.display = 'block';
+
+        // read UI options
+        const targetWidth = parseInt(document.getElementById('targetWidth').value) || null;
+        const crf = parseInt(document.getElementById('crf').value) || 28;
+        const abr = parseInt(document.getElementById('abr').value) || 128;
+
+        log('Loading FFmpeg core (this may take ~2–10s first time)...');
+        if (!ffmpeg.isLoaded()) {
+          try {
+            await ffmpeg.load();
+            log('FFmpeg loaded.');
+          } catch (e) {
+            log('Failed to load ffmpeg:', e);
+            return;
+          }
+        } else {
+          log('FFmpeg already loaded.');
+        }
+
+        const inName = 'input' + Date.now() + '.' + (file.name.split('.').pop() || 'mp4');
+        const outName = 'output.mp4';
+
+        log(`Writing "${inName}" to virtual FS (size ${file.size} bytes)`);
+        ffmpeg.FS('writeFile', inName, await fetchFile(file));
+
+        // Build ffmpeg args:
+        // - scale if targetWidth provided (height = -2 preserves aspect ratio and even dimensions)
+        // - use libx264 + crf for size/quality tradeoff
+        // - set audio bitrate
+        // - use preset veryfast for speed; change to slower for slightly better compression
+        const args = ['-i', inName];
+
+        if (targetWidth) {
+          args.push('-vf', `scale=${targetWidth}:-2`);
+        }
+
+        args.push(
+          '-c:v', 'libx264',
+          '-crf', String(crf),
+          '-preset', 'veryfast',
+          '-c:a', 'aac',
+          '-b:a', `${abr}k`,
+          '-movflags', 'faststart', // for streaming friendliness
+          outName
+        );
+
+        log('Running ffmpeg with args: ' + args.join(' '));
+        try {
+          const start = performance.now();
+          await ffmpeg.run(...args);
+          const end = performance.now();
+          log(`ffmpeg finished in ${((end - start)/1000).toFixed(1)}s`);
+        } catch (err) {
+          log('ffmpeg run failed:', err);
+          return;
+        }
+
+        // read result
+        try {
+          const data = ffmpeg.FS('readFile', outName);
+          const blob = new Blob([data.buffer], { type: 'video/mp4' });
+          const url = URL.createObjectURL(blob);
+
+          downloadLink.href = url;
+          downloadLink.style.display = 'inline-block';
+          downloadLink.textContent = `Download compressed (${Math.round(blob.size/1024)} KB)`;
+          downloadLink.download = `compressed-${file.name.replace(/\\.[^.]+$/, '')}.mp4`;
+
+          // show sizes
+          log(`Original size: ${Math.round(file.size/1024)} KB`);
+          log(`Compressed size: ${Math.round(blob.size/1024)} KB`);
+          log('Done — click the download link above.');
+        } catch (e) {
+          log('Failed to read output file:', e);
+        }
+
+        // optional: cleanup FS to free memory
+        try { ffmpeg.FS('unlink', inName); } catch {}
+        try { ffmpeg.FS('unlink', outName); } catch {}
+      });
+    })();
+  </script>
+</body>
+</html>
